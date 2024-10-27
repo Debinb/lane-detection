@@ -53,49 +53,49 @@ def removeCloseLines(linelist, m):
     return linelist_copy
 
 #Function that draws lines on the image
-def lineDetection(img, masked_img, solid_line_previous, dashed_line_previous):
+def lineDetection(img, masked_img, solid_line_previous_left, solid_line_previous_right):
     img_copy = copy.deepcopy(img)
     height, width = masked_img.shape
+    #paramters = (image, rho, theta, threshold[, lines[, minLineLength[, maxLineGap]]]) 
     linesP = cv2.HoughLinesP(masked_img, 1, np.pi/180, 50, None, 30, 20)
-    linelist = linesP.tolist()
+    linelist = linesP.tolist() if linesP is not None else []
     linelist = [tuple((line[0][:2], line[0][2:])) for line in linelist]
-    line_length = []
-    for line in linelist:
-        line_length.append(math.dist(line[0], line[1]))
-        
-    try:
-        solid_line = linelist[line_length.index(max(line_length))]
-        linelist.remove(solid_line)
-    except ValueError:
-        solid_line = solid_line_previous
 
-    m, b = slopeIntercept(solid_line)
-    linelist = removeCloseLines(linelist, m)
-    initial = (int((height*0.6-b)/m), int(height*0.6))
-    final = (int((height-b)/m), height)
-    detected_line = cv2.line(img_copy, initial, final, (0,255,0), 5)
+    if not linelist:  # If no lines detected, return previous lines
+        return img_copy, solid_line_previous_left, solid_line_previous_right
 
-    line_length = []
-    
-    for line in linelist:
-        line_length.append(math.dist(line[0], line[1]))
-        
+    line_length = [math.dist(line[0], line[1]) for line in linelist]
+
+    # Sort the lines based on length, in descending order
+    sorted_lines = [line for _, line in sorted(zip(line_length, linelist), reverse=True)]
+
     try:
-        dashed_line = linelist[line_length.index(max(line_length))]
-    except ValueError:
-        dashed_line = dashed_line_previous
-        
-    m, b = slopeIntercept(dashed_line)
-    initial = (int((height*0.6-b)/m), int(height*0.6))
-    final = (int((height-b)/m), height)
-    detected_line = cv2.line(detected_line, initial, final, (0,0,255), 5)
-    
-    return detected_line, solid_line, dashed_line
+        solid_line_left = sorted_lines[0]  # Longest line (left lane boundary)
+        solid_line_right = sorted_lines[1]  # Second longest line (right lane boundary)
+    except IndexError:
+        # If we don't detect two lines, use the previous ones
+        solid_line_left = solid_line_previous_left
+        solid_line_right = solid_line_previous_right
+
+    # Draw the left solid line
+    m_left, b_left = slopeIntercept(solid_line_left)
+    initial_left = (int((height*0.6-b_left)/m_left), int(height*0.6))
+    final_left = (int((height-b_left)/m_left), height)
+    detected_line = cv2.line(img_copy, initial_left, final_left, (0,255,0), 5)
+
+    # Draw the right solid line
+    m_right, b_right = slopeIntercept(solid_line_right)
+    initial_right = (int((height*0.6-b_right)/m_right), int(height*0.6))
+    final_right = (int((height-b_right)/m_right), height)
+    detected_line = cv2.line(detected_line, initial_right, final_right, (0,255,0), 5)
+
+    return detected_line, solid_line_left, solid_line_right
+
 
 video = cv2.VideoCapture("data/straight_lane_detection.mp4")
 out = cv2.VideoWriter('results/straight_lane_detection.avi',cv2.VideoWriter_fourcc(*'XVID'), 25, (960,540))
-solid_line_previous = None
-dashed_line_previous = None
+solid_line_previous_left = None
+solid_line_previous_right = None
 print("Generating video output...\n")
 
 while True:
@@ -106,9 +106,9 @@ while True:
     height, width = processed_img.shape
     polygon = [(int(width*0.1), height), (int(width*0.45), int(height*0.6)), (int(width*0.55), int(height*0.6)), (int(0.95*width), height)]
     masked_img = regionOfInterest(processed_img, polygon)
-    detected_lines, solid_line, dashed_line = lineDetection(img, masked_img, solid_line_previous, dashed_line_previous)
-    solid_line_previous = solid_line
-    dashed_line_previous = dashed_line
+    detected_lines, solid_line_left, solid_line_right = lineDetection(img, masked_img, solid_line_previous_left, solid_line_previous_right)
+    solid_line_previous_left = solid_line_left
+    solid_line_previous_right = solid_line_right
     out.write(detected_lines)
 
 out.release()
