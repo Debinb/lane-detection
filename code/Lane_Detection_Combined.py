@@ -7,22 +7,22 @@ import math
 def preprocessing(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    gblur = cv2.GaussianBlur(gray,(5,5),0)
-    white_mask = cv2.threshold(gblur,200,255,cv2.THRESH_BINARY)[1]
-    lower_yellow = np.array([0,100,100])
-    upper_yellow = np.array([210,255,255])
+    gblur = cv2.GaussianBlur(gray, (5, 5), 0)
+    white_mask = cv2.threshold(gblur, 200, 255, cv2.THRESH_BINARY)[1]
+    lower_yellow = np.array([0, 100, 100])
+    upper_yellow = np.array([210, 255, 255])
     yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
     mask = cv2.bitwise_or(white_mask, yellow_mask)
-    return mask
+
+    # Apply morphological operations to clean the mask
+    kernel = np.ones((5, 5), np.uint8)
+    mask_cleaned = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    return mask_cleaned
 
 # Function that defines the polygon region of interest
 def regionOfInterest(img, polygon):
     mask = np.zeros_like(img)
-    x1, y1 = polygon[0]
-    x2, y2 = polygon[1]
-    x3, y3 = polygon[2]
-    x4, y4 = polygon[3]
-    pts = np.array([[x1,y1], [x2,y2], [x3,y3], [x4,y4]], np.int32)
+    pts = np.array(polygon, np.int32)
     cv2.fillPoly(mask, [pts], 255)
     masked_img = cv2.bitwise_and(img, mask)
     return masked_img
@@ -33,39 +33,39 @@ def warp(img, source_points, destination_points, destn_size):
     warped_img = cv2.warpPerspective(img, matrix, destn_size)
     return warped_img
 
-# Function that fits curves to the lanes
+# Function to fit curves to the lanes
 def fitCurve(img):
-    histogram = np.sum(img[img.shape[0]//2:,:], axis=0)
-    midpoint = int(histogram.shape[0]/2)
+    histogram = np.sum(img[img.shape[0] // 2:, :], axis=0)
+    midpoint = int(histogram.shape[0] / 2)
     leftx_base = np.argmax(histogram[:midpoint])
     rightx_base = np.argmax(histogram[midpoint:]) + midpoint
     nwindows = 50
     margin = 100
     minpix = 50
-    window_height = int(img.shape[0]/nwindows)
+    window_height = int(img.shape[0] / nwindows)
     y, x = img.nonzero()
     leftx_current = leftx_base
     rightx_current = rightx_base
     left_lane_indices = []
     right_lane_indices = []
-    
+
     for window in range(nwindows):
-        win_y_low = img.shape[0] - (window+1)*window_height
-        win_y_high = img.shape[0] - window*window_height
+        win_y_low = img.shape[0] - (window + 1) * window_height
+        win_y_high = img.shape[0] - window * window_height
         win_xleft_low = leftx_current - margin
         win_xleft_high = leftx_current + margin
         win_xright_low = rightx_current - margin
         win_xright_high = rightx_current + margin
 
         good_left_indices = ((y >= win_y_low) & (y < win_y_high) & (x >= win_xleft_low) & (x < win_xleft_high)).nonzero()[0]
-        good_right_indices  = ((y >= win_y_low) & (y < win_y_high) & (x >= win_xright_low) & (x < win_xright_high)).nonzero()[0]
+        good_right_indices = ((y >= win_y_low) & (y < win_y_high) & (x >= win_xright_low) & (x < win_xright_high)).nonzero()[0]
         left_lane_indices.append(good_left_indices)
         right_lane_indices.append(good_right_indices)
         if len(good_left_indices) > minpix:
             leftx_current = int(np.mean(x[good_left_indices]))
         if len(good_right_indices) > minpix:
             rightx_current = int(np.mean(x[good_right_indices]))
-        
+
     left_lane_indices = np.concatenate(left_lane_indices)
     right_lane_indices = np.concatenate(right_lane_indices)
     leftx = x[left_lane_indices]
@@ -77,21 +77,49 @@ def fitCurve(img):
 
     return left_fit, right_fit
 
-# Function that determines whether the lane is straight or curved
-def classifyLane(left_fit, right_fit):
-    left_curve_radius = (1 + (2*left_fit[0])**2)**1.5 / np.abs(2*left_fit[0])
-    right_curve_radius = (1 + (2*right_fit[0])**2)**1.5 / np.abs(2*right_fit[0])
-    avg_curve_radius = (left_curve_radius + right_curve_radius) / 2
+# Function to calculate the radius of curvature using the warped image
+def calculateCurvature(left_fit, right_fit, img_shape):
+    y_eval = img_shape[0] - 1  # Evaluate at the bottom of the image
+    
+    # Calculate curvature for both left and right lanes, if available
+    left_curvature, right_curvature = None, None
+    
+    if left_fit is not None:
+        left_curvature = ((1 + (2 * left_fit[0] * y_eval + left_fit[1]) ** 2) ** 1.5) / np.abs(2 * left_fit[0])
+    if right_fit is not None:
+        right_curvature = ((1 + (2 * right_fit[0] * y_eval + right_fit[1]) ** 2) ** 1.5) / np.abs(2 * right_fit[0])
 
-    # Classification based on curvature radius
-    if avg_curve_radius > 1000:  # Adjust this threshold as necessary
+    # If both lanes are detected, calculate the average curvature
+    if left_curvature is not None and right_curvature is not None:
+        avg_curvature = (left_curvature + right_curvature) / 2
+        print("both lanes are being detected.")
+    elif left_curvature is None:
+        avg_curvature = right_curvature
+        print("Left lane cannot be detected. Right lane curve calculated.")
+    elif right_curvature is None:
+        avg_curvature = left_curvature
+        print("Right lane cannot be detected. Left lane curve calculated.")
+    else:
+        avg_curvature = None  # No lane detected
+
+    return avg_curvature
+
+# Function that determines whether the lane is straight or curved using the warped image
+def classifyLane(left_fit, right_fit, warped_img_shape):
+    curvature = calculateCurvature(left_fit, right_fit, warped_img_shape)
+    
+    if curvature is None:
+        return 'no lane detected'
+
+    # Classification based on curvature radius: straight if high curvature, curved if lower curvature
+    if curvature > 2000:  # Adjust this threshold as necessary
         return 'straight'
     else:
         return 'curved'
 
 # Function to draw straight lines on the image
 def drawStraightLines(img, masked_img):
-    lines = cv2.HoughLinesP(masked_img, 1, np.pi/180, 50, minLineLength=100, maxLineGap=50)
+    lines = cv2.HoughLinesP(masked_img, 1, np.pi / 180, 80, minLineLength=45, maxLineGap=50)
     if lines is not None:
         for line in lines:
             x1, y1, x2, y2 = line[0]
@@ -99,7 +127,7 @@ def drawStraightLines(img, masked_img):
     return img
 
 # Main video processing loop for real-time display
-video = cv2.VideoCapture("data/combined_lane_detection.mp4")
+video = cv2.VideoCapture(1)
 
 while True:
     isTrue, frame = video.read()
@@ -108,24 +136,31 @@ while True:
     
     processed_img = preprocessing(frame)
     height, width = processed_img.shape
-    polygon = [(int(width*0.15), height), (int(width*0.45), int(height*0.62)), (int(width*0.55), int(height*0.62)), (int(width*0.95), height)]
+    polygon = [(int(width * 0.01), height), (int(width * 0.15), int(height * 0.55)), (int(width * 0.85), int(height * 0.55)), (int(width * 0.99), height)]
     masked_img = regionOfInterest(processed_img, polygon)
+    cv2.imshow("Region of Interest", masked_img)
+    # Define source and destination points for warping
+    source_points = np.float32([[int(width * 0.01), int(height * 0.5)], [int(width * 0.99), int(height * 0.62)], [int(width * 0.01), height], [int(0.99 * width), height]])
+    destination_points = np.float32([[0, 0], [480, 0], [0, 640], [480, 640]])
+    warped_img_size = (480, 640)
+   
+    # Warp the image to get bird's-eye view
+    warped_img = warp(masked_img, source_points, destination_points, warped_img_size)
+    cv2.imshow("Warped", warped_img)
 
-    # Fit curves to lanes
-    left_fit, right_fit = fitCurve(masked_img)
+    # Fit curves to lanes in the warped image
+    left_fit, right_fit = fitCurve(warped_img)
 
-    # Classify lane type (straight or curved)
-    lane_type = classifyLane(left_fit, right_fit)
+    # Classify lane type using the warped image
+    lane_type = classifyLane(left_fit, right_fit, warped_img.shape)
+    print(lane_type)
 
     if lane_type == 'straight':
         result_frame = drawStraightLines(frame, masked_img)
+    elif lane_type == 'curved':
+        result_frame = frame  # Add your visualization for curved lines here
     else:
-        # If curved, apply curve detection and overlay
-        source_points = np.float32([[int(width*0.49), int(height*0.62)], [int(width*0.58), int(height*0.62)], [int(width*0.15), int(height)], [int(0.95*width), int(height)]])
-        destination_points = np.float32([[0,0], [400,0], [0, 960], [400, 960]])
-        warped_img = warp(masked_img, source_points, destination_points, (400, 960))
-        left_fit, right_fit = fitCurve(warped_img)
-        result_frame = frame  # Add visualization for curved lines here
+        result_frame = frame  # In case no lane is detected or you can show a default behavior
 
     # Display the result frame in a window
     cv2.imshow('Lane Detection', result_frame)
